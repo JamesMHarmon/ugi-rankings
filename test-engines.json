@@ -1,0 +1,26 @@
+{
+    "name": "Test Tournament",
+    "rounds": 1,
+    "gamesPerPair": 2,
+    "concurrency": 2,
+    "engines": [
+        {
+            "id": "test1",
+            "name": "TestEngine1",
+            "executable": "node",
+            "arguments": "[\"test-engines.js\", \"TestEngine1\"]",
+            "working_directory": ".",
+            "elo_rating": 1500.0,
+            "active": true
+        },
+        {
+            "id": "test2",
+            "name": "TestEngine2",
+            "executable": "node",
+            "arguments": "[\"test-engines.js\", \"TestEngine2\"]",
+            "working_directory": ".",
+            "elo_rating": 1500.0,
+            "active": true
+        }
+    ]
+}

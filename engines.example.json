@@ -1,0 +1,56 @@
+{
+    "tournament": {
+        "name": "UGI Engine Tournament",
+        "description": "Sample tournament configuration",
+        "timeControl": "60+1",
+        "rounds": 2,
+        "gamesPerPair": 2,
+        "concurrency": 2
+    },
+    "engines": [
+        {
+            "name": "Stockfish 16",
+            "executable": "./engines/stockfish",
+            "workingDirectory": "./engines",
+            "arguments": [],
+            "initialRating": 2800,
+            "enabled": true,
+            "description": "Strong chess engine"
+        },
+        {
+            "name": "Komodo 14",
+            "executable": "./engines/komodo",
+            "workingDirectory": "./engines",
+            "arguments": [
+                "--threads",
+                "1"
+            ],
+            "initialRating": 2750,
+            "enabled": true,
+            "description": "Commercial chess engine"
+        },
+        {
+            "name": "LC0 0.29",
+            "executable": "./engines/lc0",
+            "workingDirectory": "./engines",
+            "arguments": [
+                "--weights",
+                "weights.pb.gz"
+            ],
+            "initialRating": 2700,
+            "enabled": true,
+            "description": "Neural network chess engine"
+        },
+        {
+            "name": "Test Engine",
+            "executable": "./engines/test-engine",
+            "workingDirectory": "./engines",
+            "arguments": [
+                "--debug"
+            ],
+            "initialRating": 1500,
+            "enabled": false,
+            "description": "Test engine for development"
+        }
+    ]
+}
