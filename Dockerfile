@@ -1,16 +1,11 @@
 # Use Node.js 18 LTS as base image
 FROM node:18
 
-# Install system dependencies for TensorFlow and PostgreSQL
+# Install system dependencies for PostgreSQL
 RUN apt-get update && apt-get install -y \
-    python3 \
-    python3-pip \
     postgresql-client \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
-
-# Install TensorFlow for Node.js (Python backend)
-RUN pip3 install tensorflow
 
 # Set working directory
 WORKDIR /app

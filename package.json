@@ -16,12 +16,13 @@
         "ugi",
         "rankings",
         "chess",
-        "games"
+        "games",
+        "tournament",
+        "elo"
     ],
     "author": "JamesMHarmon",
     "license": "MIT",
     "dependencies": {
-        "@tensorflow/tfjs-node": "^4.0.0",
         "pg": "^8.11.0",
         "commander": "^11.0.0",
         "dotenv": "^16.0.0"

@@ -1,11 +1,63 @@
 {
     "tournament": {
         "name": "UGI Engine Tournament",
-        "description": "Sample tournament configuration",
+        "description": "Sample tournament configuration with match sets",
         "timeControl": "60+1",
         "rounds": 2,
         "gamesPerPair": 2,
-        "concurrency": 2
+        "concurrency": 2,
+        "defaultMatchSet": "standard_openings",
+        "matchSets": [
+            {
+                "name": "standard_openings",
+                "description": "Common chess openings",
+                "gamesPerPosition": 2,
+                "startingPositions": [
+                    {
+                        "name": "Starting Position",
+                        "description": "Standard chess starting position",
+                        "moves": []
+                    },
+                    {
+                        "name": "King's Pawn Opening",
+                        "description": "1.e4",
+                        "moves": ["e2e4"]
+                    },
+                    {
+                        "name": "Queen's Pawn Opening", 
+                        "description": "1.d4",
+                        "moves": ["d2d4"]
+                    },
+                    {
+                        "name": "English Opening",
+                        "description": "1.c4",
+                        "moves": ["c2c4"]
+                    },
+                    {
+                        "name": "Réti Opening",
+                        "description": "1.Nf3",
+                        "moves": ["g1f3"]
+                    }
+                ]
+            },
+            {
+                "name": "tactical_positions",
+                "description": "Tactical puzzle positions",
+                "gamesPerPosition": 2,
+                "startingPositions": [
+                    {
+                        "name": "Tactical Position 1",
+                        "description": "Complex middlegame position",
+                        "fen": "r1bqkb1r/pppp1ppp/2n2n2/4p3/2B1P3/3P1N2/PPP2PPP/RNBQK2R w KQkq - 4 4"
+                    },
+                    {
+                        "name": "Endgame Study",
+                        "description": "King and pawn endgame",
+                        "fen": "8/8/8/3k4/3P4/3K4/8/8 w - - 0 1"
+                    }
+                ]
+            }
+        ]
     },
     "engines": [
         {

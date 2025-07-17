@@ -1,10 +1,20 @@
 import { Pool } from 'pg';
-import * as tf from '@tensorflow/tfjs-node';
 import dotenv from 'dotenv';
 import { Command } from 'commander';
 import * as fs from 'fs';
 import * as path from 'path';
 import { spawn, ChildProcess } from 'child_process';
+import {
+    createDatabasePool,
+    initializeDatabase,
+    addEngine,
+    updateRatings,
+    getRankings,
+    listEngines,
+    recordGameResult,
+    getRecentGames,
+    getPairGameCounts
+} from './database';
 
 // Types
 interface EngineConfig {
@@ -15,6 +25,21 @@ interface EngineConfig {
     initialRating: number;
     enabled: boolean;
     description?: string;
+    options?: { [key: string]: string | number | boolean };
+}
+
+interface StartingPosition {
+    name: string;
+    description?: string;
+    moves: string[];
+    fen?: string; // Optional FEN string for non-standard starting positions
+}
+
+interface MatchSet {
+    name: string;
+    description?: string;
+    startingPositions: StartingPosition[];
+    gamesPerPosition: number; // Number of games per starting position (must be even for color balance)
 }
 
 interface TournamentConfig {
@@ -25,6 +50,8 @@ interface TournamentConfig {
         rounds?: number;
         gamesPerPair?: number;
         concurrency?: number;
+        matchSets?: MatchSet[];
+        defaultMatchSet?: string; // Name of default match set to use
     };
     engines: EngineConfig[];
 }
@@ -37,6 +64,21 @@ interface GameResult {
     duration?: number;
     error?: string;
     finalStatus?: string;
+    startingPosition?: string;
+    matchSetName?: string;
+    engine1Color: 'white' | 'black';
+    engine2Color: 'white' | 'black';
+}
+
+interface MatchSetResult {
+    engine1Id: number;
+    engine2Id: number;
+    matchSetName: string;
+    games: GameResult[];
+    engine1Score: number; // Total score for engine1 (wins = 1, draws = 0.5, losses = 0)
+    engine2Score: number; // Total score for engine2
+    totalGames: number;
+    completed: boolean;
 }
 
 interface EngineProcess {
@@ -61,13 +103,7 @@ dotenv.config();
 const DEFAULT_CONFIG_FILE = process.env.ENGINES_CONFIG || './engines.json';
 
 // PostgreSQL connection
-const pool = new Pool({
-    host: process.env.POSTGRES_HOST || 'localhost',
-    port: parseInt(process.env.POSTGRES_PORT || '5432'),
-    database: process.env.POSTGRES_DB || 'ugi_rankings',
-    user: process.env.POSTGRES_USER || 'postgres',
-    password: process.env.POSTGRES_PASSWORD || 'password',
-});
+const pool = createDatabasePool();
 
 // CLI program setup
 const program = new Command();
@@ -84,7 +120,7 @@ program
     .action(async () => {
         try {
             console.log('🔧 Initializing database...');
-            await initializeDatabase();
+            await initializeDatabase(pool);
             console.log('✅ Database initialized successfully');
         } catch (error) {
             console.error('❌ Database initialization failed:', error);
@@ -118,21 +154,22 @@ program
 // Run tournament command
 program
     .command('run-tournament')
-    .description('Run games between engines automatically')
-    .option('-r, --rounds <rounds>', 'Number of rounds to play', '1')
-    .option('-p, --pairs <pairs>', 'Number of games per engine pair', '1')
+    .description('Run continuous tournament with intelligent pairing selection')
+    .option('-r, --rounds <rounds>', 'Target rounds per engine pair (for weighting)', '1')
+    .option('-p, --pairs <pairs>', 'Target games per engine pair (for weighting)', '1')
     .option('-c, --concurrency <concurrency>', 'Number of concurrent games', '1')
     .option('--time-control <time>', 'Time control (e.g., "60+1" for 60s + 1s increment)', '10+0.1')
     .action(async (options) => {
         try {
-            console.log('🏁 Starting tournament...');
+            console.log('🏁 Starting continuous tournament...');
+            console.log('Press Ctrl+C to stop gracefully');
             const result = await runTournament({
                 rounds: parseInt(options.rounds),
                 gamesPerPair: parseInt(options.pairs),
                 concurrency: parseInt(options.concurrency),
                 timeControl: options.timeControl
             });
-            console.log(`✅ Tournament completed: ${result.totalGames} games played`);
+            console.log(`✅ Tournament stopped: ${result.totalGames} games played`);
             console.log(`🏆 Wins: ${result.wins}, Draws: ${result.draws}, Errors: ${result.errors}`);
         } catch (error) {
             console.error('❌ Tournament failed:', error);
@@ -152,7 +189,7 @@ program
             console.log(`🎮 Playing game between engines ${options.engine1} and ${options.engine2}...`);
             const result = await playGame(parseInt(options.engine1), parseInt(options.engine2), options.timeControl);
             console.log(`✅ Game completed: ${result.result}`);
-            await recordGameResult(result);
+            await recordGameResult(pool, result);
             console.log('✅ Game result recorded and ratings updated');
         } catch (error) {
             console.error('❌ Game failed:', error);
@@ -168,7 +205,7 @@ program
     .option('--detailed', 'Show detailed engine information')
     .action(async (options) => {
         try {
-            const rankings = await getRankings(parseInt(options.limit), options.detailed);
+            const rankings = await getRankings(pool, parseInt(options.limit), options.detailed);
             console.log('\n🏆 Current Rankings:');
 
             if (options.detailed) {
@@ -199,7 +236,7 @@ program
     .option('--enabled-only', 'Show only enabled engines')
     .action(async (options) => {
         try {
-            const engines = await listEngines(options.enabledOnly);
+            const engines = await listEngines(pool, options.enabledOnly);
             console.log('\n🔧 Engine Configuration:');
             console.log('');
 
@@ -245,70 +282,6 @@ program
             process.exit(1);
         }
     });
-
-// Test TensorFlow
-program
-    .command('test-tf')
-    .description('Test TensorFlow.js setup')
-    .action(() => {
-        console.log('✅ TensorFlow.js is loaded');
-        console.log(`Version: ${tf.version.tfjs}`);
-        console.log(`Backend: ${tf.getBackend()}`);
-    });
-
-// Database functions
-async function initializeDatabase(): Promise<void> {
-    const createTables = `
-        CREATE TABLE IF NOT EXISTS engines (
-            id SERIAL PRIMARY KEY,
-            name VARCHAR(255) UNIQUE NOT NULL,
-            executable VARCHAR(500),
-            working_directory VARCHAR(500),
-            arguments TEXT,
-            description TEXT,
-            rating INTEGER DEFAULT 1500,
-            games_played INTEGER DEFAULT 0,
-            wins INTEGER DEFAULT 0,
-            losses INTEGER DEFAULT 0,
-            draws INTEGER DEFAULT 0,
-            enabled BOOLEAN DEFAULT true,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE TABLE IF NOT EXISTS games (
-            id SERIAL PRIMARY KEY,
-            engine1_id INTEGER REFERENCES engines(id),
-            engine2_id INTEGER REFERENCES engines(id),
-            winner_id INTEGER REFERENCES engines(id),
-            is_draw BOOLEAN DEFAULT FALSE,
-            engine1_rating_before INTEGER,
-            engine2_rating_before INTEGER,
-            engine1_rating_after INTEGER,
-            engine2_rating_after INTEGER,
-            played_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_engines_rating ON engines(rating DESC);
-        CREATE INDEX IF NOT EXISTS idx_games_played_at ON games(played_at);
-    `;
-
-    await pool.query(createTables);
-}
-
-async function addEngine(
-    name: string,
-    rating: number = 1500,
-    executable?: string,
-    workingDirectory?: string,
-    args?: string[],
-    description?: string
-): Promise<number> {
-    const result = await pool.query(
-        'INSERT INTO engines (name, rating, executable, working_directory, arguments, description) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
-        [name, rating, executable, workingDirectory, args ? JSON.stringify(args) : null, description]
-    );
-    return result.rows[0].id;
-}
 
 async function loadEnginesFromConfig(configPath: string, replace: boolean = false): Promise<{ loaded: number; skipped: number; disabled: number }> {
     // Read and parse config file
@@ -368,6 +341,7 @@ async function loadEnginesFromConfig(configPath: string, replace: boolean = fals
             } else {
                 // Add new engine
                 await addEngine(
+                    pool,
                     engineConfig.name,
                     engineConfig.initialRating,
                     engineConfig.executable,
@@ -419,50 +393,175 @@ async function autoLoadEngines(): Promise<void> {
     }
 }
 
-async function recordGame(engine1Id: number, engine2Id: number, isDraw: boolean = false): Promise<void> {
-    const winnerId = isDraw ? null : engine1Id;
+async function playMatchSet(
+    engine1Id: number,
+    engine2Id: number,
+    timeControl: string,
+    matchSet: MatchSet
+): Promise<MatchSetResult> {
+    console.log(`🎯 Starting match set: ${matchSet.name}`);
+    console.log(`   ${matchSet.startingPositions.length} positions × 2 games each = ${matchSet.startingPositions.length * 2} total games`);
 
-    // Get current ratings
-    const engine1 = await pool.query('SELECT rating FROM engines WHERE id = $1', [engine1Id]);
-    const engine2 = await pool.query('SELECT rating FROM engines WHERE id = $1', [engine2Id]);
+    const games: GameResult[] = [];
+    let engine1Score = 0;
+    let engine2Score = 0;
 
-    const rating1Before = engine1.rows[0].rating;
-    const rating2Before = engine2.rows[0].rating;
+    try {
+        // Play each starting position with both color assignments
+        for (const startingPosition of matchSet.startingPositions) {
+            console.log(`🎮 Playing position: ${startingPosition.name}`);
+            
+            // Game 1: engine1 as white, engine2 as black
+            console.log(`   Game 1/2: Engine ${engine1Id} (white) vs Engine ${engine2Id} (black)`);
+            const game1 = await playGame(
+                engine1Id,
+                engine2Id,
+                timeControl,
+                startingPosition,
+                matchSet.name,
+                'white'
+            );
+            games.push(game1);
+            
+            // Update scores based on game1 result
+            if (game1.result === 'win') {
+                engine1Score += 1;
+            } else if (game1.result === 'loss') {
+                engine2Score += 1;
+            } else if (game1.result === 'draw') {
+                engine1Score += 0.5;
+                engine2Score += 0.5;
+            }
+            
+            // Small delay between games
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            
+            // Game 2: engine1 as black, engine2 as white
+            console.log(`   Game 2/2: Engine ${engine1Id} (black) vs Engine ${engine2Id} (white)`);
+            const game2 = await playGame(
+                engine1Id,
+                engine2Id,
+                timeControl,
+                startingPosition,
+                matchSet.name,
+                'black'
+            );
+            games.push(game2);
+            
+            // Update scores based on game2 result
+            if (game2.result === 'win') {
+                engine1Score += 1;
+            } else if (game2.result === 'loss') {
+                engine2Score += 1;
+            } else if (game2.result === 'draw') {
+                engine1Score += 0.5;
+                engine2Score += 0.5;
+            }
+            
+            console.log(`   Position complete. Running score: ${engine1Score}-${engine2Score}`);
+            
+            // Small delay between positions
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
 
-    await pool.query(
-        'INSERT INTO games (engine1_id, engine2_id, winner_id, is_draw, engine1_rating_before, engine2_rating_before) VALUES ($1, $2, $3, $4, $5, $6)',
-        [engine1Id, engine2Id, winnerId, isDraw, rating1Before, rating2Before]
-    );
+        const totalGames = games.length;
+        console.log(`✅ Match set complete: ${matchSet.name}`);
+        console.log(`   Final score: ${engine1Score}-${engine2Score} (${totalGames} games)`);
+
+        return {
+            engine1Id,
+            engine2Id,
+            matchSetName: matchSet.name,
+            games,
+            engine1Score,
+            engine2Score,
+            totalGames,
+            completed: true
+        };
+
+    } catch (error) {
+        console.error(`❌ Match set failed: ${error}`);
+        
+        return {
+            engine1Id,
+            engine2Id,
+            matchSetName: matchSet.name,
+            games,
+            engine1Score,
+            engine2Score,
+            totalGames: games.length,
+            completed: false
+        };
+    }
 }
 
-async function recordGameResult(gameResult: GameResult): Promise<void> {
-    const isDraw = gameResult.result === 'draw';
-    const winnerId = isDraw ? null : (gameResult.result === 'win' ? gameResult.engine1Id : gameResult.engine2Id);
-
-    // Get current ratings
-    const engine1 = await pool.query('SELECT rating FROM engines WHERE id = $1', [gameResult.engine1Id]);
-    const engine2 = await pool.query('SELECT rating FROM engines WHERE id = $1', [gameResult.engine2Id]);
-
-    if (engine1.rows.length === 0 || engine2.rows.length === 0) {
-        throw new Error('One or both engines not found');
-    }
-
-    const rating1Before = engine1.rows[0].rating;
-    const rating2Before = engine2.rows[0].rating;
-
-    // Record the game
-    await pool.query(
-        'INSERT INTO games (engine1_id, engine2_id, winner_id, is_draw, engine1_rating_before, engine2_rating_before) VALUES ($1, $2, $3, $4, $5, $6)',
-        [gameResult.engine1Id, gameResult.engine2Id, winnerId, isDraw, rating1Before, rating2Before]
-    );
-
-    // Update ratings
-    if (gameResult.result !== 'error') {
-        await updateRatings(gameResult.engine1Id, gameResult.engine2Id, isDraw);
+async function recordMatchSetResult(pool: Pool, matchSetResult: MatchSetResult): Promise<void> {
+    const client = await pool.connect();
+    
+    try {
+        await client.query('BEGIN');
+        
+        // Record each individual game
+        for (const game of matchSetResult.games) {
+            await recordGameResult(pool, game, false); // Don't update ratings yet
+        }
+        
+        // Calculate rating changes based on match set aggregate score
+        const engine1Query = await client.query('SELECT rating FROM engines WHERE id = $1', [matchSetResult.engine1Id]);
+        const engine2Query = await client.query('SELECT rating FROM engines WHERE id = $1', [matchSetResult.engine2Id]);
+        
+        if (engine1Query.rows.length === 0 || engine2Query.rows.length === 0) {
+            throw new Error('Engine not found for rating update');
+        }
+        
+        const engine1Rating = engine1Query.rows[0].rating;
+        const engine2Rating = engine2Query.rows[0].rating;
+        
+        // Calculate expected scores using Elo formula
+        const expectedScore1 = 1 / (1 + Math.pow(10, (engine2Rating - engine1Rating) / 400));
+        const expectedScore2 = 1 - expectedScore1;
+        
+        // Actual scores as percentages
+        const actualScore1 = matchSetResult.engine1Score / matchSetResult.totalGames;
+        const actualScore2 = matchSetResult.engine2Score / matchSetResult.totalGames;
+        
+        // K-factor (rating volatility)
+        const K = 32;
+        
+        // Calculate rating changes
+        const ratingChange1 = Math.round(K * (actualScore1 - expectedScore1));
+        const ratingChange2 = Math.round(K * (actualScore2 - expectedScore2));
+        
+        const newRating1 = engine1Rating + ratingChange1;
+        const newRating2 = engine2Rating + ratingChange2;
+        
+        // Update ratings
+        await client.query('UPDATE engines SET rating = $1 WHERE id = $2', [newRating1, matchSetResult.engine1Id]);
+        await client.query('UPDATE engines SET rating = $1 WHERE id = $2', [newRating2, matchSetResult.engine2Id]);
+        
+        await client.query('COMMIT');
+        
+        console.log(`📈 Ratings updated:`);
+        console.log(`   Engine ${matchSetResult.engine1Id}: ${engine1Rating} → ${newRating1} (${ratingChange1 >= 0 ? '+' : ''}${ratingChange1})`);
+        console.log(`   Engine ${matchSetResult.engine2Id}: ${engine2Rating} → ${newRating2} (${ratingChange2 >= 0 ? '+' : ''}${ratingChange2})`);
+        
+    } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('❌ Failed to record match set result:', error);
+        throw error;
+    } finally {
+        client.release();
     }
 }
 
-async function playGame(engine1Id: number, engine2Id: number, timeControl: string): Promise<GameResult> {
+async function playGame(
+    engine1Id: number, 
+    engine2Id: number, 
+    timeControl: string,
+    startingPosition?: StartingPosition,
+    matchSetName?: string,
+    engine1Color: 'white' | 'black' = 'white'
+): Promise<GameResult> {
     // Get engine details
     const engine1Query = await pool.query('SELECT * FROM engines WHERE id = $1 AND enabled = true', [engine1Id]);
     const engine2Query = await pool.query('SELECT * FROM engines WHERE id = $1 AND enabled = true', [engine2Id]);
@@ -478,7 +577,7 @@ async function playGame(engine1Id: number, engine2Id: number, timeControl: strin
 
     try {
         // Run the actual game between engines
-        const result = await runEngineGame(engine1, engine2, timeControl);
+        const result = await runEngineGame(engine1, engine2, timeControl, startingPosition, matchSetName, engine1Color);
 
         console.log(`🏁 Game result: ${result.result}`);
         return result;
@@ -488,12 +587,23 @@ async function playGame(engine1Id: number, engine2Id: number, timeControl: strin
             engine1Id,
             engine2Id,
             result: 'error',
-            error: error instanceof Error ? error.message : String(error)
+            error: error instanceof Error ? error.message : String(error),
+            engine1Color,
+            engine2Color: engine1Color === 'white' ? 'black' : 'white',
+            ...(startingPosition && { startingPosition: startingPosition.name }),
+            ...(matchSetName && { matchSetName })
         };
     }
 }
 
-async function runEngineGame(engine1: any, engine2: any, timeControl: string): Promise<GameResult> {
+async function runEngineGame(
+    engine1: any, 
+    engine2: any, 
+    timeControl: string,
+    startingPosition?: StartingPosition,
+    matchSetName?: string,
+    engine1Color: 'white' | 'black' = 'white'
+): Promise<GameResult> {
     console.log(`⏱️  Time control: ${timeControl}`);
     console.log(`� Starting engines...`);
 
@@ -503,23 +613,47 @@ async function runEngineGame(engine1: any, engine2: any, timeControl: string): P
 
     try {
         // Start both engine processes
-        const engine1Process = await startEngine(engine1);
-        const engine2Process = await startEngine(engine2);
+        const engine1Process = await startEngine(engine1, startingPosition ? {} : undefined);
+        const engine2Process = await startEngine(engine2, startingPosition ? {} : undefined);
 
         engineProcesses = [engine1Process, engine2Process];
 
         console.log(`✅ Both engines started`);
+        
+        // Set up starting position if provided
+        if (startingPosition) {
+            console.log(`🎯 Using starting position: ${startingPosition.name}`);
+            
+            // Send starting moves to both engines
+            if (startingPosition.moves && startingPosition.moves.length > 0) {
+                for (const move of startingPosition.moves) {
+                    await sendMoveToEngine(engine1Process, move);
+                    await sendMoveToEngine(engine2Process, move);
+                }
+                console.log(`📋 Applied ${startingPosition.moves.length} starting moves`);
+            }
+        }
 
         // Play the game
         let gameStatus: GameStatus = { inProgress: true, playerToMove: 1 };
-        let moveCount = 0;
+        let moveCount = startingPosition?.moves?.length || 0;
         const maxMoves = 500; // Prevent infinite games
 
         while (gameStatus.inProgress && moveCount < maxMoves) {
             const currentPlayer = gameStatus.playerToMove;
-            const currentEngine = currentPlayer === 1 ? engine1Process : engine2Process;
+            
+            // Determine which engine plays based on color assignment
+            // Player 1 is white, Player 2 is black
+            let currentEngine: EngineProcess;
+            if (currentPlayer === 1) {
+                // White's turn
+                currentEngine = engine1Color === 'white' ? engine1Process : engine2Process;
+            } else {
+                // Black's turn
+                currentEngine = engine1Color === 'black' ? engine1Process : engine2Process;
+            }
 
-            console.log(`🎮 Move ${moveCount + 1}: ${currentEngine.name} to play`);
+            console.log(`🎮 Move ${moveCount + 1}: ${currentEngine.name} (${currentPlayer === 1 ? 'white' : 'black'}) to play`);
 
             // Request move from current player
             const move = await getEngineMove(currentEngine, timeControl);
@@ -567,7 +701,11 @@ async function runEngineGame(engine1: any, engine2: any, timeControl: string): P
             result,
             moves,
             duration,
-            finalStatus: JSON.stringify(gameStatus)
+            finalStatus: JSON.stringify(gameStatus),
+            engine1Color,
+            engine2Color: engine1Color === 'white' ? 'black' : 'white',
+            ...(startingPosition && { startingPosition: startingPosition.name }),
+            ...(matchSetName && { matchSetName })
         };
 
     } finally {
@@ -580,7 +718,7 @@ async function runEngineGame(engine1: any, engine2: any, timeControl: string): P
     }
 }
 
-async function startEngine(engineConfig: any): Promise<EngineProcess> {
+async function startEngine(engineConfig: any, options?: { [key: string]: string | number | boolean }): Promise<EngineProcess> {
     return new Promise((resolve, reject) => {
         const args = engineConfig.arguments ? JSON.parse(engineConfig.arguments) : [];
         const engineProcess = spawn(engineConfig.executable, args, {
@@ -599,7 +737,18 @@ async function startEngine(engineConfig: any): Promise<EngineProcess> {
 
         engineProcess.stdout?.on('data', (data: Buffer) => {
             const output = data.toString().trim();
-            if (output.includes('ugiok') || output.includes('ready')) {
+            if (output.includes('ugiok')) {
+                // Send engine options if provided
+                const allOptions = { ...engineConfig.options, ...options };
+                if (allOptions) {
+                    for (const [name, value] of Object.entries(allOptions)) {
+                        engineProcess.stdin?.write(`setoption name ${name} value ${value}\n`);
+                    }
+                }
+                
+                // Send isready after options
+                engineProcess.stdin?.write('isready\n');
+            } else if (output.includes('readyok')) {
                 if (!isReady) {
                     isReady = true;
                     clearTimeout(timeout);
@@ -753,14 +902,24 @@ async function getGameStatus(engineProc: EngineProcess): Promise<GameStatus> {
     concurrency: number;
     timeControl: string;
 }): Promise<{ totalGames: number; wins: number; draws: number; errors: number }> {
-    console.log(`🏆 Tournament settings:`);
-    console.log(`   Rounds: ${options.rounds}`);
-    console.log(`   Games per pair: ${options.gamesPerPair}`);
-    console.log(`   Concurrency: ${options.concurrency}`);
+    console.log(`🏆 Continuous Tournament settings:`);
+    console.log(`   Target games: ${options.rounds * options.gamesPerPair} per engine pair`);
+    console.log(`   Concurrent games: ${options.concurrency}`);
     console.log(`   Time control: ${options.timeControl}`);
 
+    // Get tournament configuration if available
+    let tournamentConfig: TournamentConfig | undefined;
+    try {
+        if (fs.existsSync(DEFAULT_CONFIG_FILE)) {
+            const configData = fs.readFileSync(DEFAULT_CONFIG_FILE, 'utf8');
+            tournamentConfig = JSON.parse(configData);
+        }
+    } catch (error) {
+        console.warn('⚠️  Could not load tournament configuration for match sets');
+    }
+
     // Get all enabled engines
-    const enginesQuery = await pool.query('SELECT id, name FROM engines WHERE enabled = true ORDER BY id');
+    const enginesQuery = await pool.query('SELECT id, name, rating, games_played FROM engines WHERE enabled = true ORDER BY id');
     const engines = enginesQuery.rows;
 
     if (engines.length < 2) {
@@ -768,121 +927,264 @@ async function getGameStatus(engineProc: EngineProcess): Promise<GameStatus> {
     }
 
     console.log(`🎮 ${engines.length} engines participating:`);
-    engines.forEach(engine => console.log(`   - ${engine.name} (ID: ${engine.id})`));
+    engines.forEach(engine => console.log(`   - ${engine.name} (ID: ${engine.id}, Rating: ${engine.rating})`));
 
     let totalGames = 0;
     let wins = 0;
     let draws = 0;
     let errors = 0;
+    let shouldContinue = true;
 
-    // Generate all pairings
-    const pairings: Array<[number, number]> = [];
-    for (let i = 0; i < engines.length; i++) {
-        for (let j = i + 1; j < engines.length; j++) {
-            for (let round = 0; round < options.rounds; round++) {
-                for (let game = 0; game < options.gamesPerPair; game++) {
-                    // Alternate colors for fairness
-                    if (game % 2 === 0) {
-                        pairings.push([engines[i].id, engines[j].id]);
-                    } else {
-                        pairings.push([engines[j].id, engines[i].id]);
-                    }
+    // Graceful shutdown handler
+    const handleShutdown = () => {
+        console.log('\n🛑 Graceful shutdown requested...');
+        shouldContinue = false;
+    };
+
+    process.on('SIGINT', handleShutdown);
+    process.on('SIGTERM', handleShutdown);
+
+    // Track running games to maintain concurrency
+    const runningGames = new Set<Promise<any>>();
+
+    console.log(`\n🚀 Starting continuous tournament with ${options.concurrency} concurrent games...`);
+    console.log('Press Ctrl+C to stop gracefully\n');
+
+    try {
+        while (shouldContinue) {
+            // Remove completed games from tracking
+            for (const gamePromise of runningGames) {
+                if (await isPromiseSettled(gamePromise)) {
+                    runningGames.delete(gamePromise);
                 }
             }
-        }
-    }
 
-    console.log(`📊 Total games to play: ${pairings.length}`);
+            // Start new games up to concurrency limit
+            while (runningGames.size < options.concurrency && shouldContinue) {
+                // Select optimal pairing using weighted sampling
+                const pairing = await selectOptimalPairing(engines, tournamentConfig);
+                if (!pairing) {
+                    console.log('⚠️  No suitable pairings found, waiting...');
+                    await new Promise(resolve => setTimeout(resolve, 5000));
+                    continue;
+                }
 
-    // Play games with limited concurrency
-    const semaphore = new Array(options.concurrency).fill(null);
-    let gameIndex = 0;
+                const { engine1Id, engine2Id, matchSet } = pairing;
+                
+                // Start the match set asynchronously
+                const gamePromise = (async () => {
+                    try {
+                        const matchSetResult = await playMatchSet(
+                            engine1Id, 
+                            engine2Id, 
+                            options.timeControl, 
+                            matchSet
+                        );
+                        await recordMatchSetResult(pool, matchSetResult);
 
-    while (gameIndex < pairings.length) {
-        const batch = pairings.slice(gameIndex, gameIndex + options.concurrency);
-        gameIndex += batch.length;
+                        totalGames += matchSetResult.totalGames;
+                        const wins = matchSetResult.games.filter(g => g.result === 'win' || g.result === 'loss').length;
+                        const draws = matchSetResult.games.filter(g => g.result === 'draw').length;
+                        const gameErrors = matchSetResult.games.filter(g => g.error).length;
+                        
+                        totalGames += wins;
+                        totalGames += draws;
+                        if (gameErrors > 0) errors += gameErrors;
 
-        const gamePromises = batch.map(async ([engine1Id, engine2Id]) => {
-            try {
-                const result = await playGame(engine1Id, engine2Id, options.timeControl);
-                await recordGameResult(result);
+                        // Update our local engine data
+                        const updatedEngines = await pool.query('SELECT id, name, rating, games_played FROM engines WHERE enabled = true ORDER BY id');
+                        engines.length = 0;
+                        engines.push(...updatedEngines.rows);
 
-                totalGames++;
-                if (result.result === 'win' || result.result === 'loss') wins++;
-                if (result.result === 'draw') draws++;
-                if (result.error) errors++;
+                        console.log(`📈 Match set completed: ${totalGames} total games | Running: ${runningGames.size}/${options.concurrency}`);
+                        return matchSetResult;
+                    } catch (error) {
+                        errors++;
+                        console.error(`❌ Match set failed: ${error}`);
+                        return null;
+                    }
+                })();
 
-                console.log(`📈 Progress: ${totalGames}/${pairings.length} games completed`);
-                return result;
-            } catch (error) {
-                errors++;
-                console.error(`❌ Game failed: ${error}`);
-                return null;
+                runningGames.add(gamePromise);
             }
-        });
 
-        await Promise.all(gamePromises);
+            // Small delay to prevent busy waiting
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+
+        // Wait for all running games to complete
+        console.log(`\n⏳ Waiting for ${runningGames.size} remaining games to complete...`);
+        await Promise.all(runningGames);
+
+    } finally {
+        // Remove shutdown handlers
+        process.off('SIGINT', handleShutdown);
+        process.off('SIGTERM', handleShutdown);
     }
 
+    console.log(`\n✅ Tournament stopped gracefully`);
     return { totalGames, wins, draws, errors };
 }
 
-async function updateRatings(engine1Id: number, engine2Id: number, isDraw: boolean = false): Promise<void> {
-    // Simple ELO rating calculation (K-factor = 32)
-    const K = 32;
-
-    const engine1 = await pool.query('SELECT rating FROM engines WHERE id = $1', [engine1Id]);
-    const engine2 = await pool.query('SELECT rating FROM engines WHERE id = $1', [engine2Id]);
-
-    const rating1 = engine1.rows[0].rating;
-    const rating2 = engine2.rows[0].rating;
-
-    const expected1 = 1 / (1 + Math.pow(10, (rating2 - rating1) / 400));
-    const expected2 = 1 / (1 + Math.pow(10, (rating1 - rating2) / 400));
-
-    const score1 = isDraw ? 0.5 : 1;
-    const score2 = isDraw ? 0.5 : 0;
-
-    const newRating1 = Math.round(rating1 + K * (score1 - expected1));
-    const newRating2 = Math.round(rating2 + K * (score2 - expected2));
-
-    await pool.query('UPDATE engines SET rating = $1, games_played = games_played + 1 WHERE id = $2', [newRating1, engine1Id]);
-    await pool.query('UPDATE engines SET rating = $1, games_played = games_played + 1 WHERE id = $2', [newRating2, engine2Id]);
-
-    // Update win/loss/draw counts
-    if (isDraw) {
-        await pool.query('UPDATE engines SET draws = draws + 1 WHERE id = $1 OR id = $2', [engine1Id, engine2Id]);
-    } else {
-        await pool.query('UPDATE engines SET wins = wins + 1 WHERE id = $1', [engine1Id]);
-        await pool.query('UPDATE engines SET losses = losses + 1 WHERE id = $1', [engine2Id]);
+// Helper function to check if a promise is settled
+async function isPromiseSettled(promise: Promise<any>): Promise<boolean> {
+    try {
+        const result = await Promise.race([
+            promise,
+            new Promise(resolve => setTimeout(() => resolve(Symbol('timeout')), 0))
+        ]);
+        return result !== Symbol('timeout');
+    } catch {
+        return true; // Promise rejected, so it's settled
     }
 }
 
-async function getRankings(limit: number = 10, detailed: boolean = false): Promise<any[]> {
-    const fields = detailed
-        ? 'name, rating, games_played, wins, losses, draws, executable, description'
-        : 'name, rating, games_played, wins, losses, draws';
-
-    const result = await pool.query(
-        `SELECT ${fields} FROM engines WHERE enabled = true ORDER BY rating DESC LIMIT $1`,
-        [limit]
-    );
-    return result.rows;
+// Calculate uncertainty for an engine based on games played and rating volatility
+function calculateUncertainty(engine: any, recentGames: any[]): number {
+    const baseUncertainty = Math.max(0.1, 1.0 - (engine.games_played / 100)); // Decreases with more games
+    
+    // Add volatility based on recent rating changes
+    if (recentGames.length >= 2) {
+        const ratingChanges = recentGames.slice(-10).map((game: any) => 
+            Math.abs((game.engine1_rating_after || game.engine1_rating_before) - game.engine1_rating_before)
+        );
+        const avgChange = ratingChanges.reduce((a: number, b: number) => a + b, 0) / ratingChanges.length;
+        const volatility = Math.min(0.5, avgChange / 100); // Normalize to 0-0.5
+        return Math.min(1.0, baseUncertainty + volatility);
+    }
+    
+    return baseUncertainty;
 }
 
-async function listEngines(enabledOnly: boolean = false): Promise<any[]> {
-    const whereClause = enabledOnly ? 'WHERE enabled = true' : '';
-    const result = await pool.query(
-        `SELECT name, rating, games_played, wins, losses, draws, executable, working_directory, arguments, description, enabled 
-         FROM engines ${whereClause} ORDER BY name`
-    );
-    return result.rows;
+// Select optimal pairing using weighted sampling
+async function selectOptimalPairing(engines: any[], tournamentConfig?: TournamentConfig): Promise<{
+    engine1Id: number;
+    engine2Id: number;
+    matchSet: MatchSet;
+} | null> {
+    if (engines.length < 2) return null;
+
+    // Get recent games for uncertainty calculation
+    const recentGames = await getRecentGames(pool, 24);
+
+    // Get game counts between each pair
+    const pairCounts = await getPairGameCounts(pool);
+
+    // Get match set configuration
+    let matchSet: MatchSet | undefined;
+    if (tournamentConfig?.tournament.matchSets && tournamentConfig.tournament.matchSets.length > 0) {
+        const defaultMatchSetName = tournamentConfig.tournament.defaultMatchSet;
+        if (defaultMatchSetName) {
+            matchSet = tournamentConfig.tournament.matchSets.find(ms => ms.name === defaultMatchSetName);
+        }
+        if (!matchSet) {
+            matchSet = tournamentConfig.tournament.matchSets[0]; // Use first match set as fallback
+        }
+    }
+    
+    // If no match set is configured, create a default one
+    if (!matchSet) {
+        matchSet = {
+            name: "Standard",
+            description: "Standard starting position",
+            startingPositions: [{
+                name: "Initial Position",
+                description: "Standard chess starting position",
+                moves: []
+            }],
+            gamesPerPosition: 2
+        };
+    }
+
+    // Calculate weights for all possible pairings
+    const pairings: Array<{ 
+        engines: [number, number], 
+        weight: number
+    }> = [];
+    
+    for (let i = 0; i < engines.length; i++) {
+        for (let j = i + 1; j < engines.length; j++) {
+            const engine1 = engines[i];
+            const engine2 = engines[j];
+            
+            // Calculate individual uncertainties
+            const uncertainty1 = calculateUncertainty(engine1, recentGames.filter(g => 
+                g.engine1_id === engine1.id || g.engine2_id === engine1.id));
+            const uncertainty2 = calculateUncertainty(engine2, recentGames.filter(g => 
+                g.engine1_id === engine2.id || g.engine2_id === engine2.id));
+            
+            // Rating difference factor (prefer closer ratings)
+            const ratingDiff = Math.abs(engine1.rating - engine2.rating);
+            const ratingProximity = 1.0 / (1.0 + ratingDiff / 200); // Normalize by rating scale
+            
+            // High rating preference (prefer higher rated engines)
+            const avgRating = (engine1.rating + engine2.rating) / 2;
+            const ratingPreference = Math.min(1.0, avgRating / 2000); // Normalize to typical rating range
+            
+            // Game count factor (prefer pairs with fewer games)
+            const pairKey = `${engine1.id}-${engine2.id}`;
+            const gameCount = pairCounts.get(pairKey) || 0;
+            const gameFrequency = Math.max(0.1, 1.0 - (gameCount / 50)); // Decreases with more games
+            
+            // Combined weight
+            const uncertaintyWeight = (uncertainty1 + uncertainty2) / 2;
+            const weight = uncertaintyWeight * 0.4 + 
+                          ratingProximity * 0.3 + 
+                          ratingPreference * 0.2 + 
+                          gameFrequency * 0.1;
+            
+            pairings.push({
+                engines: [engine1.id, engine2.id],
+                weight
+            });
+        }
+    }
+
+    if (pairings.length === 0) return null;
+
+    // Sort by weight and add some randomness to prevent always picking the same pairing
+    pairings.sort((a, b) => b.weight - a.weight);
+    
+    // Use weighted random selection from top candidates
+    const topCandidates = pairings.slice(0, Math.min(5, pairings.length));
+    const totalWeight = topCandidates.reduce((sum, p) => sum + p.weight, 0);
+    
+    if (totalWeight === 0 || topCandidates.length === 0) {
+        // Fallback to random selection
+        if (pairings.length === 0) return null;
+        const randomIndex = Math.floor(Math.random() * pairings.length);
+        const randomPair = pairings[randomIndex];
+        return randomPair ? {
+            engine1Id: randomPair.engines[0],
+            engine2Id: randomPair.engines[1],
+            matchSet
+        } : null;
+    }
+    
+    let random = Math.random() * totalWeight;
+    for (const pairing of topCandidates) {
+        random -= pairing.weight;
+        if (random <= 0) {
+            return {
+                engine1Id: pairing.engines[0],
+                engine2Id: pairing.engines[1],
+                matchSet
+            };
+        }
+    }
+    
+    // Fallback
+    const fallback = topCandidates[0];
+    return fallback ? {
+        engine1Id: fallback.engines[0],
+        engine2Id: fallback.engines[1],
+        matchSet
+    } : null;
 }
 
 // Main execution
 async function main() {
     console.log('🎮 UGI Rankings System');
-    console.log(`📊 TensorFlow.js version: ${tf.version.tfjs}`);
 
     // Auto-load engines from config file on startup
     await autoLoadEngines();
