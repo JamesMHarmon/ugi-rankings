@@ -213,7 +213,8 @@ The test engines (`test-engines.js`) simulate UGI protocol communication and can
 
 The system uses PostgreSQL with the following tables:
 
-- **engines**: Store engine information (name, executable, rating, stats)
+- **engines**: Store engine information (name, description, rating, game statistics)
+  - Engine executable information is only stored in the configuration file
 - **games**: Store game results and rating changes
 
 ## Docker Usage

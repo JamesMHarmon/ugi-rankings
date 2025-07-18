@@ -6,16 +6,12 @@ export async function initializeDatabase(pool: Pool): Promise<void> {
         CREATE TABLE IF NOT EXISTS engines (
             id SERIAL PRIMARY KEY,
             name VARCHAR(255) UNIQUE NOT NULL,
-            executable VARCHAR(500),
-            working_directory VARCHAR(500),
-            arguments TEXT,
             description TEXT,
             rating INTEGER DEFAULT 1500,
             games_played INTEGER DEFAULT 0,
             wins INTEGER DEFAULT 0,
             losses INTEGER DEFAULT 0,
             draws INTEGER DEFAULT 0,
-            enabled BOOLEAN DEFAULT true,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
@@ -54,14 +50,11 @@ export async function addEngine(
     pool: Pool,
     name: string,
     rating: number = 1500,
-    executable?: string,
-    workingDirectory?: string,
-    args?: string[],
     description?: string
 ): Promise<number> {
     const result = await pool.query(
-        'INSERT INTO engines (name, rating, executable, working_directory, arguments, description) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id',
-        [name, rating, executable, workingDirectory, args ? JSON.stringify(args) : null, description]
+        'INSERT INTO engines (name, rating, description) VALUES ($1, $2, $3) RETURNING id',
+        [name, rating, description]
     );
     return result.rows[0].id;
 }
@@ -101,22 +94,21 @@ export async function updateRatings(pool: Pool, engine1Id: number, engine2Id: nu
 // Get engine rankings
 export async function getRankings(pool: Pool, limit: number = 10, detailed: boolean = false): Promise<any[]> {
     const fields = detailed
-        ? 'name, rating, games_played, wins, losses, draws, executable, description'
+        ? 'name, rating, games_played, wins, losses, draws, description'
         : 'name, rating, games_played, wins, losses, draws';
 
     const result = await pool.query(
-        `SELECT ${fields} FROM engines WHERE enabled = true ORDER BY rating DESC LIMIT $1`,
+        `SELECT ${fields} FROM engines ORDER BY rating DESC LIMIT $1`,
         [limit]
     );
     return result.rows;
 }
 
 // List all engines
-export async function listEngines(pool: Pool, enabledOnly: boolean = false): Promise<any[]> {
-    const whereClause = enabledOnly ? 'WHERE enabled = true' : '';
+export async function listEngines(pool: Pool): Promise<any[]> {
     const result = await pool.query(
-        `SELECT name, rating, games_played, wins, losses, draws, executable, working_directory, arguments, description, enabled 
-         FROM engines ${whereClause} ORDER BY name`
+        `SELECT name, rating, games_played, wins, losses, draws, description 
+         FROM engines ORDER BY name`
     );
     return result.rows;
 }
@@ -157,11 +149,11 @@ export async function recordGameResult(pool: Pool, gameResult: {
           engine1_color, engine2_color) 
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
         [
-            gameResult.engine1Id, 
-            gameResult.engine2Id, 
-            winnerId, 
-            isDraw, 
-            rating1Before, 
+            gameResult.engine1Id,
+            gameResult.engine2Id,
+            winnerId,
+            isDraw,
+            rating1Before,
             rating2Before,
             gameResult.moves ? JSON.stringify(gameResult.moves) : null,
             gameResult.duration,
@@ -199,13 +191,13 @@ export async function getPairGameCounts(pool: Pool): Promise<Map<string, number>
         FROM games
         GROUP BY engine1_id, engine2_id
     `);
-    
+
     const pairCounts = new Map<string, number>();
     result.rows.forEach(row => {
         pairCounts.set(`${row.engine1_id}-${row.engine2_id}`, parseInt(row.game_count));
         pairCounts.set(`${row.engine2_id}-${row.engine1_id}`, parseInt(row.game_count));
     });
-    
+
     return pairCounts;
 }
 

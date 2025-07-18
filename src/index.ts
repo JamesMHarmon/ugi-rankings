@@ -23,7 +23,6 @@ interface EngineConfig {
     workingDirectory: string;
     arguments: string[];
     initialRating: number;
-    enabled: boolean;
     description?: string;
     options?: { [key: string]: string | number | boolean };
 }
@@ -142,9 +141,6 @@ program
             if (result.skipped > 0) {
                 console.log(`⚠️  Skipped ${result.skipped} engines (already exist)`);
             }
-            if (result.disabled > 0) {
-                console.log(`ℹ️  Skipped ${result.disabled} disabled engines`);
-            }
         } catch (error) {
             console.error('❌ Failed to load engines from config:', error);
             process.exit(1);
@@ -209,12 +205,12 @@ program
             console.log('\n🏆 Current Rankings:');
 
             if (options.detailed) {
-                console.log('Rank | Engine Name        | Rating | Games | W/L/D | Executable');
+                console.log('Rank | Engine Name        | Rating | Games | W/L/D | Description');
                 console.log('-----|-------------------|--------|-------|-------|------------------');
                 rankings.forEach((engine, index) => {
                     const wld = `${engine.wins}/${engine.losses}/${engine.draws}`;
-                    const executableShort = engine.executable ? path.basename(engine.executable) : 'N/A';
-                    console.log(`${(index + 1).toString().padStart(4)} | ${engine.name.padEnd(17)} | ${engine.rating.toString().padStart(6)} | ${engine.games_played.toString().padStart(5)} | ${wld.padEnd(5)} | ${executableShort}`);
+                    const description = engine.description || 'N/A';
+                    console.log(`${(index + 1).toString().padStart(4)} | ${engine.name.padEnd(17)} | ${engine.rating.toString().padStart(6)} | ${engine.games_played.toString().padStart(5)} | ${wld.padEnd(5)} | ${description}`);
                 });
             } else {
                 console.log('Rank | Engine Name        | Rating | Games');
@@ -233,28 +229,17 @@ program
 program
     .command('list-engines')
     .description('List all engines with their configuration')
-    .option('--enabled-only', 'Show only enabled engines')
     .action(async (options) => {
         try {
-            const engines = await listEngines(pool, options.enabledOnly);
+            const engines = await listEngines(pool);
             console.log('\n🔧 Engine Configuration:');
             console.log('');
 
             engines.forEach((engine, index) => {
-                console.log(`${index + 1}. ${engine.name} ${engine.enabled ? '✅' : '❌'}`);
+                console.log(`${index + 1}. ${engine.name}`);
                 console.log(`   Rating: ${engine.rating} | Games: ${engine.games_played}`);
-                if (engine.executable) {
-                    console.log(`   Executable: ${engine.executable}`);
-                }
-                if (engine.working_directory) {
-                    console.log(`   Working Dir: ${engine.working_directory}`);
-                }
-                if (engine.arguments) {
-                    const args = JSON.parse(engine.arguments);
-                    if (args.length > 0) {
-                        console.log(`   Arguments: ${args.join(' ')}`);
-                    }
-                }
+                const wld = `${engine.wins}/${engine.losses}/${engine.draws}`;
+                console.log(`   Record: ${wld}`);
                 if (engine.description) {
                     console.log(`   Description: ${engine.description}`);
                 }
@@ -283,7 +268,7 @@ program
         }
     });
 
-async function loadEnginesFromConfig(configPath: string, replace: boolean = false): Promise<{ loaded: number; skipped: number; disabled: number }> {
+async function loadEnginesFromConfig(configPath: string, replace: boolean = false): Promise<{ loaded: number; skipped: number }> {
     // Read and parse config file
     const configFile = path.resolve(configPath);
     if (!fs.existsSync(configFile)) {
@@ -299,7 +284,6 @@ async function loadEnginesFromConfig(configPath: string, replace: boolean = fals
 
     let loaded = 0;
     let skipped = 0;
-    let disabled = 0;
 
     console.log(`📋 Tournament: ${config.tournament.name}`);
     if (config.tournament.description) {
@@ -307,13 +291,6 @@ async function loadEnginesFromConfig(configPath: string, replace: boolean = fals
     }
 
     for (const engineConfig of config.engines) {
-        // Skip disabled engines
-        if (!engineConfig.enabled) {
-            console.log(`⏭️  Skipping disabled engine: ${engineConfig.name}`);
-            disabled++;
-            continue;
-        }
-
         try {
             // Check if engine already exists
             const existing = await pool.query('SELECT id FROM engines WHERE name = $1', [engineConfig.name]);
@@ -322,11 +299,8 @@ async function loadEnginesFromConfig(configPath: string, replace: boolean = fals
                 if (replace) {
                     // Update existing engine
                     await pool.query(
-                        'UPDATE engines SET executable = $1, working_directory = $2, arguments = $3, description = $4, rating = $5 WHERE name = $6',
+                        'UPDATE engines SET description = $1, rating = $2 WHERE name = $3',
                         [
-                            engineConfig.executable,
-                            engineConfig.workingDirectory,
-                            JSON.stringify(engineConfig.arguments),
                             engineConfig.description,
                             engineConfig.initialRating,
                             engineConfig.name
@@ -344,9 +318,6 @@ async function loadEnginesFromConfig(configPath: string, replace: boolean = fals
                     pool,
                     engineConfig.name,
                     engineConfig.initialRating,
-                    engineConfig.executable,
-                    engineConfig.workingDirectory,
-                    engineConfig.arguments,
                     engineConfig.description
                 );
                 console.log(`➕ Added engine: ${engineConfig.name} (${engineConfig.initialRating} rating)`);
@@ -358,7 +329,7 @@ async function loadEnginesFromConfig(configPath: string, replace: boolean = fals
         }
     }
 
-    return { loaded, skipped, disabled };
+    return { loaded, skipped };
 }
 
 async function autoLoadEngines(): Promise<void> {
@@ -379,13 +350,10 @@ async function autoLoadEngines(): Promise<void> {
         if (result.skipped > 0) {
             console.log(`ℹ️  ${result.skipped} engines already exist`);
         }
-        if (result.disabled > 0) {
-            console.log(`ℹ️  ${result.disabled} engines are disabled`);
-        }
 
         // Show total engine count
-        const totalEngines = await pool.query('SELECT COUNT(*) as count FROM engines WHERE enabled = true');
-        console.log(`🎮 Total active engines: ${totalEngines.rows[0].count}`);
+        const totalEngines = await pool.query('SELECT COUNT(*) as count FROM engines');
+        console.log(`🎮 Total engines: ${totalEngines.rows[0].count}`);
 
     } catch (error) {
         console.warn(`⚠️  Failed to auto-load engines: ${error}`);
@@ -410,7 +378,7 @@ async function playMatchSet(
         // Play each starting position with both color assignments
         for (const startingPosition of matchSet.startingPositions) {
             console.log(`🎮 Playing position: ${startingPosition.name}`);
-            
+
             // Game 1: engine1 as white, engine2 as black
             console.log(`   Game 1/2: Engine ${engine1Id} (white) vs Engine ${engine2Id} (black)`);
             const game1 = await playGame(
@@ -422,7 +390,7 @@ async function playMatchSet(
                 'white'
             );
             games.push(game1);
-            
+
             // Update scores based on game1 result
             if (game1.result === 'win') {
                 engine1Score += 1;
@@ -432,10 +400,10 @@ async function playMatchSet(
                 engine1Score += 0.5;
                 engine2Score += 0.5;
             }
-            
+
             // Small delay between games
             await new Promise(resolve => setTimeout(resolve, 1000));
-            
+
             // Game 2: engine1 as black, engine2 as white
             console.log(`   Game 2/2: Engine ${engine1Id} (black) vs Engine ${engine2Id} (white)`);
             const game2 = await playGame(
@@ -447,7 +415,7 @@ async function playMatchSet(
                 'black'
             );
             games.push(game2);
-            
+
             // Update scores based on game2 result
             if (game2.result === 'win') {
                 engine1Score += 1;
@@ -457,9 +425,9 @@ async function playMatchSet(
                 engine1Score += 0.5;
                 engine2Score += 0.5;
             }
-            
+
             console.log(`   Position complete. Running score: ${engine1Score}-${engine2Score}`);
-            
+
             // Small delay between positions
             await new Promise(resolve => setTimeout(resolve, 1000));
         }
@@ -481,7 +449,7 @@ async function playMatchSet(
 
     } catch (error) {
         console.error(`❌ Match set failed: ${error}`);
-        
+
         return {
             engine1Id,
             engine2Id,
@@ -497,54 +465,54 @@ async function playMatchSet(
 
 async function recordMatchSetResult(pool: Pool, matchSetResult: MatchSetResult): Promise<void> {
     const client = await pool.connect();
-    
+
     try {
         await client.query('BEGIN');
-        
+
         // Record each individual game
         for (const game of matchSetResult.games) {
             await recordGameResult(pool, game, false); // Don't update ratings yet
         }
-        
+
         // Calculate rating changes based on match set aggregate score
         const engine1Query = await client.query('SELECT rating FROM engines WHERE id = $1', [matchSetResult.engine1Id]);
         const engine2Query = await client.query('SELECT rating FROM engines WHERE id = $1', [matchSetResult.engine2Id]);
-        
+
         if (engine1Query.rows.length === 0 || engine2Query.rows.length === 0) {
             throw new Error('Engine not found for rating update');
         }
-        
+
         const engine1Rating = engine1Query.rows[0].rating;
         const engine2Rating = engine2Query.rows[0].rating;
-        
+
         // Calculate expected scores using Elo formula
         const expectedScore1 = 1 / (1 + Math.pow(10, (engine2Rating - engine1Rating) / 400));
         const expectedScore2 = 1 - expectedScore1;
-        
+
         // Actual scores as percentages
         const actualScore1 = matchSetResult.engine1Score / matchSetResult.totalGames;
         const actualScore2 = matchSetResult.engine2Score / matchSetResult.totalGames;
-        
+
         // K-factor (rating volatility)
         const K = 32;
-        
+
         // Calculate rating changes
         const ratingChange1 = Math.round(K * (actualScore1 - expectedScore1));
         const ratingChange2 = Math.round(K * (actualScore2 - expectedScore2));
-        
+
         const newRating1 = engine1Rating + ratingChange1;
         const newRating2 = engine2Rating + ratingChange2;
-        
+
         // Update ratings
         await client.query('UPDATE engines SET rating = $1 WHERE id = $2', [newRating1, matchSetResult.engine1Id]);
         await client.query('UPDATE engines SET rating = $1 WHERE id = $2', [newRating2, matchSetResult.engine2Id]);
-        
+
         await client.query('COMMIT');
-        
+
         console.log(`📈 Ratings updated:`);
         console.log(`   Engine ${matchSetResult.engine1Id}: ${engine1Rating} → ${newRating1} (${ratingChange1 >= 0 ? '+' : ''}${ratingChange1})`);
         console.log(`   Engine ${matchSetResult.engine2Id}: ${engine2Rating} → ${newRating2} (${ratingChange2 >= 0 ? '+' : ''}${ratingChange2})`);
-        
+
     } catch (error) {
         await client.query('ROLLBACK');
         console.error('❌ Failed to record match set result:', error);
@@ -555,19 +523,19 @@ async function recordMatchSetResult(pool: Pool, matchSetResult: MatchSetResult):
 }
 
 async function playGame(
-    engine1Id: number, 
-    engine2Id: number, 
+    engine1Id: number,
+    engine2Id: number,
     timeControl: string,
     startingPosition?: StartingPosition,
     matchSetName?: string,
     engine1Color: 'white' | 'black' = 'white'
 ): Promise<GameResult> {
     // Get engine details
-    const engine1Query = await pool.query('SELECT * FROM engines WHERE id = $1 AND enabled = true', [engine1Id]);
-    const engine2Query = await pool.query('SELECT * FROM engines WHERE id = $1 AND enabled = true', [engine2Id]);
+    const engine1Query = await pool.query('SELECT * FROM engines WHERE id = $1', [engine1Id]);
+    const engine2Query = await pool.query('SELECT * FROM engines WHERE id = $1', [engine2Id]);
 
     if (engine1Query.rows.length === 0 || engine2Query.rows.length === 0) {
-        throw new Error('One or both engines not found or disabled');
+        throw new Error('One or both engines not found');
     }
 
     const engine1 = engine1Query.rows[0];
@@ -597,8 +565,8 @@ async function playGame(
 }
 
 async function runEngineGame(
-    engine1: any, 
-    engine2: any, 
+    engine1: any,
+    engine2: any,
     timeControl: string,
     startingPosition?: StartingPosition,
     matchSetName?: string,
@@ -619,11 +587,11 @@ async function runEngineGame(
         engineProcesses = [engine1Process, engine2Process];
 
         console.log(`✅ Both engines started`);
-        
+
         // Set up starting position if provided
         if (startingPosition) {
             console.log(`🎯 Using starting position: ${startingPosition.name}`);
-            
+
             // Send starting moves to both engines
             if (startingPosition.moves && startingPosition.moves.length > 0) {
                 for (const move of startingPosition.moves) {
@@ -641,7 +609,7 @@ async function runEngineGame(
 
         while (gameStatus.inProgress && moveCount < maxMoves) {
             const currentPlayer = gameStatus.playerToMove;
-            
+
             // Determine which engine plays based on color assignment
             // Player 1 is white, Player 2 is black
             let currentEngine: EngineProcess;
@@ -745,7 +713,7 @@ async function startEngine(engineConfig: any, options?: { [key: string]: string 
                         engineProcess.stdin?.write(`setoption name ${name} value ${value}\n`);
                     }
                 }
-                
+
                 // Send isready after options
                 engineProcess.stdin?.write('isready\n');
             } else if (output.includes('readyok')) {
@@ -918,12 +886,12 @@ async function getGameStatus(engineProc: EngineProcess): Promise<GameStatus> {
         console.warn('⚠️  Could not load tournament configuration for match sets');
     }
 
-    // Get all enabled engines
-    const enginesQuery = await pool.query('SELECT id, name, rating, games_played FROM engines WHERE enabled = true ORDER BY id');
+    // Get all engines
+    const enginesQuery = await pool.query('SELECT id, name, rating, games_played FROM engines ORDER BY id');
     const engines = enginesQuery.rows;
 
     if (engines.length < 2) {
-        throw new Error('Need at least 2 enabled engines to run a tournament');
+        throw new Error('Need at least 2 engines to run a tournament');
     }
 
     console.log(`🎮 ${engines.length} engines participating:`);
@@ -970,14 +938,14 @@ async function getGameStatus(engineProc: EngineProcess): Promise<GameStatus> {
                 }
 
                 const { engine1Id, engine2Id, matchSet } = pairing;
-                
+
                 // Start the match set asynchronously
                 const gamePromise = (async () => {
                     try {
                         const matchSetResult = await playMatchSet(
-                            engine1Id, 
-                            engine2Id, 
-                            options.timeControl, 
+                            engine1Id,
+                            engine2Id,
+                            options.timeControl,
                             matchSet
                         );
                         await recordMatchSetResult(pool, matchSetResult);
@@ -986,13 +954,13 @@ async function getGameStatus(engineProc: EngineProcess): Promise<GameStatus> {
                         const wins = matchSetResult.games.filter(g => g.result === 'win' || g.result === 'loss').length;
                         const draws = matchSetResult.games.filter(g => g.result === 'draw').length;
                         const gameErrors = matchSetResult.games.filter(g => g.error).length;
-                        
+
                         totalGames += wins;
                         totalGames += draws;
                         if (gameErrors > 0) errors += gameErrors;
 
                         // Update our local engine data
-                        const updatedEngines = await pool.query('SELECT id, name, rating, games_played FROM engines WHERE enabled = true ORDER BY id');
+                        const updatedEngines = await pool.query('SELECT id, name, rating, games_played FROM engines ORDER BY id');
                         engines.length = 0;
                         engines.push(...updatedEngines.rows);
 
@@ -1042,17 +1010,17 @@ async function isPromiseSettled(promise: Promise<any>): Promise<boolean> {
 // Calculate uncertainty for an engine based on games played and rating volatility
 function calculateUncertainty(engine: any, recentGames: any[]): number {
     const baseUncertainty = Math.max(0.1, 1.0 - (engine.games_played / 100)); // Decreases with more games
-    
+
     // Add volatility based on recent rating changes
     if (recentGames.length >= 2) {
-        const ratingChanges = recentGames.slice(-10).map((game: any) => 
+        const ratingChanges = recentGames.slice(-10).map((game: any) =>
             Math.abs((game.engine1_rating_after || game.engine1_rating_before) - game.engine1_rating_before)
         );
         const avgChange = ratingChanges.reduce((a: number, b: number) => a + b, 0) / ratingChanges.length;
         const volatility = Math.min(0.5, avgChange / 100); // Normalize to 0-0.5
         return Math.min(1.0, baseUncertainty + volatility);
     }
-    
+
     return baseUncertainty;
 }
 
@@ -1081,7 +1049,7 @@ async function selectOptimalPairing(engines: any[], tournamentConfig?: Tournamen
             matchSet = tournamentConfig.tournament.matchSets[0]; // Use first match set as fallback
         }
     }
-    
+
     // If no match set is configured, create a default one
     if (!matchSet) {
         matchSet = {
@@ -1097,42 +1065,42 @@ async function selectOptimalPairing(engines: any[], tournamentConfig?: Tournamen
     }
 
     // Calculate weights for all possible pairings
-    const pairings: Array<{ 
-        engines: [number, number], 
+    const pairings: Array<{
+        engines: [number, number],
         weight: number
     }> = [];
-    
+
     for (let i = 0; i < engines.length; i++) {
         for (let j = i + 1; j < engines.length; j++) {
             const engine1 = engines[i];
             const engine2 = engines[j];
-            
+
             // Calculate individual uncertainties
-            const uncertainty1 = calculateUncertainty(engine1, recentGames.filter(g => 
+            const uncertainty1 = calculateUncertainty(engine1, recentGames.filter(g =>
                 g.engine1_id === engine1.id || g.engine2_id === engine1.id));
-            const uncertainty2 = calculateUncertainty(engine2, recentGames.filter(g => 
+            const uncertainty2 = calculateUncertainty(engine2, recentGames.filter(g =>
                 g.engine1_id === engine2.id || g.engine2_id === engine2.id));
-            
+
             // Rating difference factor (prefer closer ratings)
             const ratingDiff = Math.abs(engine1.rating - engine2.rating);
             const ratingProximity = 1.0 / (1.0 + ratingDiff / 200); // Normalize by rating scale
-            
+
             // High rating preference (prefer higher rated engines)
             const avgRating = (engine1.rating + engine2.rating) / 2;
             const ratingPreference = Math.min(1.0, avgRating / 2000); // Normalize to typical rating range
-            
+
             // Game count factor (prefer pairs with fewer games)
             const pairKey = `${engine1.id}-${engine2.id}`;
             const gameCount = pairCounts.get(pairKey) || 0;
             const gameFrequency = Math.max(0.1, 1.0 - (gameCount / 50)); // Decreases with more games
-            
+
             // Combined weight
             const uncertaintyWeight = (uncertainty1 + uncertainty2) / 2;
-            const weight = uncertaintyWeight * 0.4 + 
-                          ratingProximity * 0.3 + 
-                          ratingPreference * 0.2 + 
-                          gameFrequency * 0.1;
-            
+            const weight = uncertaintyWeight * 0.4 +
+                ratingProximity * 0.3 +
+                ratingPreference * 0.2 +
+                gameFrequency * 0.1;
+
             pairings.push({
                 engines: [engine1.id, engine2.id],
                 weight
@@ -1144,11 +1112,11 @@ async function selectOptimalPairing(engines: any[], tournamentConfig?: Tournamen
 
     // Sort by weight and add some randomness to prevent always picking the same pairing
     pairings.sort((a, b) => b.weight - a.weight);
-    
+
     // Use weighted random selection from top candidates
     const topCandidates = pairings.slice(0, Math.min(5, pairings.length));
     const totalWeight = topCandidates.reduce((sum, p) => sum + p.weight, 0);
-    
+
     if (totalWeight === 0 || topCandidates.length === 0) {
         // Fallback to random selection
         if (pairings.length === 0) return null;
@@ -1160,7 +1128,7 @@ async function selectOptimalPairing(engines: any[], tournamentConfig?: Tournamen
             matchSet
         } : null;
     }
-    
+
     let random = Math.random() * totalWeight;
     for (const pairing of topCandidates) {
         random -= pairing.weight;
@@ -1172,7 +1140,7 @@ async function selectOptimalPairing(engines: any[], tournamentConfig?: Tournamen
             };
         }
     }
-    
+
     // Fallback
     const fallback = topCandidates[0];
     return fallback ? {
