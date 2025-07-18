@@ -1,0 +1,55 @@
+{
+    "tournament": {
+        "name": "UGI Engine Tournament",
+        "description": "Test tournament with options",
+        "timeControl": "5+0",
+        "rounds": 1,
+        "gamesPerPair": 1,
+        "concurrency": 1,
+        "defaultMatchSet": "standard_openings",
+        "matchSets": [
+            {
+                "name": "standard_openings",
+                "description": "Common chess openings",
+                "gamesPerPosition": 1,
+                "startingPositions": [
+                    {
+                        "name": "Starting Position",
+                        "description": "Standard chess starting position",
+                        "moves": []
+                    }
+                ]
+            }
+        ]
+    },
+    "engines": [
+        {
+            "name": "TestEngine1",
+            "executable": "node",
+            "workingDirectory": ".",
+            "arguments": ["test-engines.js", "TestEngine1"],
+            "initialRating": 1500,
+            "enabled": true,
+            "description": "Test engine 1",
+            "options": {
+                "Hash": "128",
+                "Threads": "1",
+                "TestOption": "value1"
+            }
+        },
+        {
+            "name": "TestEngine2",
+            "executable": "node",
+            "workingDirectory": ".",
+            "arguments": ["test-engines.js", "TestEngine2"],
+            "initialRating": 1500,
+            "enabled": true,
+            "description": "Test engine 2",
+            "options": {
+                "Hash": "256",
+                "Threads": "2",
+                "TestOption": "value2"
+            }
+        }
+    ]
+}

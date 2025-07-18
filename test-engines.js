@@ -15,15 +15,24 @@ const engineName = process.argv[2] || 'TestEngine';
 console.log(`# ${engineName} starting...`);
 
 rl.on('line', (input) => {
-    const command = input.trim().toLowerCase();
+    const command = input.trim();
+    const lowerCommand = command.toLowerCase();
 
-    if (command === 'ugi') {
+    if (lowerCommand === 'ugi') {
         console.log(`id name ${engineName}`);
         console.log(`id author Test`);
         console.log('ugiok');
-    } else if (command === 'isready') {
+    } else if (lowerCommand.startsWith('setoption')) {
+        // Parse setoption command: setoption name <name> value <value>
+        const match = command.match(/setoption name (\w+) value (.+)/i);
+        if (match) {
+            const optionName = match[1];
+            const optionValue = match[2];
+            console.log(`# ${engineName} received option: ${optionName} = ${optionValue}`);
+        }
+    } else if (lowerCommand === 'isready') {
         console.log('readyok');
-    } else if (command === 'go') {
+    } else if (lowerCommand === 'go') {
         // Simulate thinking time
         setTimeout(() => {
             moveCount++;

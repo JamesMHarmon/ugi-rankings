@@ -24,6 +24,7 @@ interface EngineConfig {
     arguments: string[];
     initialRating: number;
     description?: string;
+    enabled?: boolean;
     options?: { [key: string]: string | number | boolean };
 }
 
@@ -267,6 +268,38 @@ program
             process.exit(1);
         }
     });
+
+// Load engine configuration and merge with database info
+async function getEngineWithConfig(engineDbRow: any): Promise<any> {
+    try {
+        const configFile = path.resolve(DEFAULT_CONFIG_FILE);
+        if (!fs.existsSync(configFile)) {
+            throw new Error(`Configuration file not found: ${configFile}`);
+        }
+
+        const configData = fs.readFileSync(configFile, 'utf8');
+        const config: TournamentConfig = JSON.parse(configData);
+
+        const engineConfig = config.engines.find(e => e.name === engineDbRow.name);
+        if (!engineConfig) {
+            throw new Error(`Engine configuration not found for: ${engineDbRow.name}`);
+        }
+
+        // Merge database info with configuration
+        return {
+            ...engineDbRow,
+            executable: engineConfig.executable,
+            workingDirectory: engineConfig.workingDirectory,
+            arguments: engineConfig.arguments,
+            options: engineConfig.options || {},
+            enabled: engineConfig.enabled,
+            working_directory: engineConfig.workingDirectory // For backward compatibility
+        };
+    } catch (error) {
+        console.error(`❌ Failed to load configuration for engine ${engineDbRow.name}:`, error);
+        throw error;
+    }
+}
 
 async function loadEnginesFromConfig(configPath: string, replace: boolean = false): Promise<{ loaded: number; skipped: number }> {
     // Read and parse config file
@@ -580,9 +613,13 @@ async function runEngineGame(
     let moves: string[] = [];
 
     try {
+        // Get engine configurations
+        const engine1Config = await getEngineWithConfig(engine1);
+        const engine2Config = await getEngineWithConfig(engine2);
+
         // Start both engine processes
-        const engine1Process = await startEngine(engine1, startingPosition ? {} : undefined);
-        const engine2Process = await startEngine(engine2, startingPosition ? {} : undefined);
+        const engine1Process = await startEngine(engine1Config, startingPosition ? {} : undefined);
+        const engine2Process = await startEngine(engine2Config, startingPosition ? {} : undefined);
 
         engineProcesses = [engine1Process, engine2Process];
 
@@ -708,7 +745,8 @@ async function startEngine(engineConfig: any, options?: { [key: string]: string 
             if (output.includes('ugiok')) {
                 // Send engine options if provided
                 const allOptions = { ...engineConfig.options, ...options };
-                if (allOptions) {
+                if (allOptions && Object.keys(allOptions).length > 0) {
+                    console.log(`Setting options for ${engineConfig.name}:`, allOptions);
                     for (const [name, value] of Object.entries(allOptions)) {
                         engineProcess.stdin?.write(`setoption name ${name} value ${value}\n`);
                     }
@@ -745,9 +783,8 @@ async function startEngine(engineConfig: any, options?: { [key: string]: string 
             }
         });
 
-        // Send initial UGI commands
+        // Send initial UGI command
         engineProcess.stdin?.write('ugi\n');
-        engineProcess.stdin?.write('isready\n');
     });
 }
 

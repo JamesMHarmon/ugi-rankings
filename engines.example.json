@@ -67,7 +67,11 @@
             "arguments": [],
             "initialRating": 2800,
             "enabled": true,
-            "description": "Strong chess engine"
+            "description": "Strong chess engine",
+            "options": {
+                "Hash": "128",
+                "Threads": "1"
+            }
         },
         {
             "name": "Komodo 14",
@@ -79,7 +83,11 @@
             ],
             "initialRating": 2750,
             "enabled": true,
-            "description": "Commercial chess engine"
+            "description": "Commercial chess engine",
+            "options": {
+                "Hash": "256",
+                "Threads": "1"
+            }
         },
         {
             "name": "LC0 0.29",
@@ -91,7 +99,11 @@
             ],
             "initialRating": 2700,
             "enabled": true,
-            "description": "Neural network chess engine"
+            "description": "Neural network chess engine",
+            "options": {
+                "Threads": "1",
+                "NNCacheSize": "2000000"
+            }
         },
         {
             "name": "Test Engine",
@@ -102,7 +114,10 @@
             ],
             "initialRating": 1500,
             "enabled": false,
-            "description": "Test engine for development"
+            "description": "Test engine for development",
+            "options": {
+                "Debug": "true"
+            }
         }
     ]
 }
