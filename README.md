@@ -213,7 +213,7 @@ The project includes test engines for development and testing purposes:
 
 ```bash
 # Use the test engines configuration
-cp test-engines.json engines.json
+cp tests/fixtures/test-engines.json engines.json
 
 # Run a test tournament with mock engines
 node dist/index.js run-tournament
@@ -222,7 +222,7 @@ node dist/index.js run-tournament
 node dist/index.js play-game test1 test2
 ```
 
-The test engines (`test-engines.js`) simulate UGI protocol communication and can be used to verify the tournament system works correctly before connecting real engines.
+The test engines (`tests/utils/test-engines.js`) simulate UGI protocol communication and can be used to verify the tournament system works correctly before connecting real engines.
 
 ## Database Schema
 

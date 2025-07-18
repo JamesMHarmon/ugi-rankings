@@ -297,13 +297,13 @@ describe('Configuration Management', () => {
                         id: 'test1',
                         name: 'Test Engine 1',
                         executable: 'node',
-                        arguments: ['test-engines.js', 'TestEngine1']
+                        arguments: ['tests/utils/test-engines.js', 'TestEngine1']
                     },
                     {
                         id: 'test2',
                         name: 'Test Engine 2',
                         executable: 'node',
-                        arguments: ['test-engines.js', 'TestEngine2']
+                        arguments: ['tests/utils/test-engines.js', 'TestEngine2']
                     }
                 ]
             };

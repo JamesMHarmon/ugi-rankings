@@ -8,7 +8,7 @@
             "id": "test1",
             "name": "TestEngine1",
             "executable": "node",
-            "arguments": "[\"test-engines.js\", \"TestEngine1\"]",
+            "arguments": "[\"tests/utils/test-engines.js\", \"TestEngine1\"]",
             "working_directory": ".",
             "elo_rating": 1500.0,
             "active": true
@@ -17,7 +17,7 @@
             "id": "test2",
             "name": "TestEngine2",
             "executable": "node",
-            "arguments": "[\"test-engines.js\", \"TestEngine2\"]",
+            "arguments": "[\"tests/utils/test-engines.js\", \"TestEngine2\"]",
             "working_directory": ".",
             "elo_rating": 1500.0,
             "active": true

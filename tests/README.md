@@ -19,6 +19,20 @@ This directory contains comprehensive tests for the UGI Rankings system.
   - Game flow integration
   - Error handling and timeouts
 
+### Test Utilities
+
+- **`utils/test-engines.js`** - Mock UGI engine for testing
+  - Simulates UGI protocol communication
+  - Handles setoption commands
+  - Responds to game moves and status requests
+  - Demonstrates environment variable usage
+
+### Test Fixtures
+
+- **`fixtures/test-engines.json`** - Test engine configuration
+- **`fixtures/engines.test.json`** - Alternative test configuration
+- **`run-tests.sh`** - Shell script for running tests
+
 - **`tournament.test.ts`** - Tests for tournament system
   - Tournament configuration validation
   - Pairing generation for round-robin
