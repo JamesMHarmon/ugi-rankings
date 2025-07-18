@@ -167,11 +167,26 @@ Create a JSON file with your engine configurations:
       "options": {
         "Hash": 128,
         "Threads": 1
+      },
+      "env": {
+        "ENGINE_LOG_LEVEL": "info",
+        "CUSTOM_VAR": "value"
       }
     }
   ]
 }
 ```
+
+### Engine Configuration Options
+
+- **options**: Engine-specific options sent via `setoption name <name> value <value>` commands
+- **env**: Environment variables set when starting the engine process
+
+Common environment variables:
+- `ENGINE_LOG_LEVEL`: Controls engine logging verbosity
+- `CUDA_VISIBLE_DEVICES`: GPU selection for CUDA-enabled engines
+- `LC0_BACKEND`: Backend selection for Leela Chess Zero
+- `TEST_MODE`: Enable test mode for development engines
 
 ## Commands
 

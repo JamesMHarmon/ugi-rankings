@@ -26,6 +26,7 @@ interface EngineConfig {
     description?: string;
     enabled?: boolean;
     options?: { [key: string]: string | number | boolean };
+    env?: { [key: string]: string };
 }
 
 interface StartingPosition {
@@ -292,6 +293,7 @@ async function getEngineWithConfig(engineDbRow: any): Promise<any> {
             workingDirectory: engineConfig.workingDirectory,
             arguments: engineConfig.arguments,
             options: engineConfig.options || {},
+            env: engineConfig.env || {},
             enabled: engineConfig.enabled,
             working_directory: engineConfig.workingDirectory // For backward compatibility
         };
@@ -726,9 +728,22 @@ async function runEngineGame(
 async function startEngine(engineConfig: any, options?: { [key: string]: string | number | boolean }): Promise<EngineProcess> {
     return new Promise((resolve, reject) => {
         const args = engineConfig.arguments ? JSON.parse(engineConfig.arguments) : [];
+        
+        // Merge system environment with engine-specific environment variables
+        const processEnv = {
+            ...process.env,
+            ...engineConfig.env
+        };
+
+        // Log environment variables if any are set
+        if (engineConfig.env && Object.keys(engineConfig.env).length > 0) {
+            console.log(`Setting environment variables for ${engineConfig.name}:`, engineConfig.env);
+        }
+
         const engineProcess = spawn(engineConfig.executable, args, {
             cwd: engineConfig.working_directory || process.cwd(),
-            stdio: ['pipe', 'pipe', 'pipe']
+            stdio: ['pipe', 'pipe', 'pipe'],
+            env: processEnv
         });
 
         let isReady = false;

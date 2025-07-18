@@ -12,7 +12,19 @@ let gameState = 'waiting';
 let moveCount = 0;
 const engineName = process.argv[2] || 'TestEngine';
 
+// Check for environment variables
+const testMode = process.env.TEST_MODE === 'true';
+const debugOutput = process.env.DEBUG_OUTPUT === '1';
+const logLevel = process.env.ENGINE_LOG_LEVEL || 'info';
+
 console.log(`# ${engineName} starting...`);
+if (testMode) {
+    console.log(`# Running in test mode`);
+}
+if (debugOutput) {
+    console.log(`# Debug output enabled`);
+}
+console.log(`# Log level: ${logLevel}`);
 
 rl.on('line', (input) => {
     const command = input.trim();
